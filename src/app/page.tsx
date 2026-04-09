@@ -56,6 +56,8 @@ const EMPRENDIMIENTOS_ORDEN = [
   "partyart_official",
 ];
 
+const EMPRENDIMIENTOS_SET = new Set(EMPRENDIMIENTOS_ORDEN);
+
 // Seeded random for reproducibility
 function seededRng(seed: number) {
   let t = seed + 0x6D2B79F5;
@@ -80,6 +82,44 @@ export default function Home() {
   const [fileName, setFileName] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
+  function parseCSV(text: string): Comment[] {
+    const lines = text.split("\n").filter(l => l.trim());
+    if (lines.length < 2) return [];
+
+    // Detect delimiter (comma or semicolon)
+    const header = lines[0].toLowerCase();
+    const delim = header.includes("\t") ? "\t" : header.includes(";") ? ";" : ",";
+    const cols = header.split(delim).map(c => c.trim().replace(/"/g, ""));
+
+    // Find column indices - flexible matching
+    const usernameIdx = cols.findIndex(c => c.includes("username") || c.includes("user") || c.includes("usuario"));
+    const textIdx = cols.findIndex(c => c.includes("text") || c.includes("comment") || c.includes("comentario") || c.includes("mensaje"));
+    const picIdx = cols.findIndex(c => c.includes("pic") || c.includes("photo") || c.includes("avatar") || c.includes("profile pic"));
+
+    if (usernameIdx === -1 || textIdx === -1) return [];
+
+    const comments: Comment[] = [];
+    for (let i = 1; i < lines.length; i++) {
+      // Handle quoted CSV fields
+      const row = lines[i].match(/(".*?"|[^,\t;]+)/g)?.map(f => f.replace(/^"|"$/g, "").trim()) || lines[i].split(delim).map(f => f.trim().replace(/^"|"$/g, ""));
+
+      const username = (row[usernameIdx] || "").toLowerCase().replace(/^@/, "");
+      const text = row[textIdx] || "";
+      const pic = picIdx >= 0 ? (row[picIdx] || "") : "";
+
+      if (!username) continue;
+
+      comments.push({
+        username,
+        text,
+        pic,
+        is_emprendimiento: EMPRENDIMIENTOS_SET.has(username),
+        has_mention: text.includes("@"),
+      });
+    }
+    return comments;
+  }
+
   function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -88,16 +128,54 @@ export default function Home() {
 
     const reader = new FileReader();
     reader.onload = (ev) => {
-      try {
-        const data = JSON.parse(ev.target?.result as string) as JsonData;
-        if (!data.comments || !Array.isArray(data.comments)) {
-          setError("El archivo no tiene el formato correcto. Usa el script extraer_comentarios.py para generarlo.");
+      const content = ev.target?.result as string;
+
+      // Detect if JSON or CSV
+      const trimmed = content.trim();
+      if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+        // JSON
+        try {
+          const raw = JSON.parse(trimmed);
+          let data: JsonData;
+          if (raw.comments && Array.isArray(raw.comments)) {
+            data = raw as JsonData;
+          } else if (Array.isArray(raw)) {
+            // Array of comments directly
+            data = {
+              post_url: "",
+              extracted_at: "",
+              total_comments: raw.length,
+              comments: raw.map((c: Record<string, string>) => ({
+                username: (c.username || c.user || "").toLowerCase(),
+                text: c.text || c.comment || "",
+                pic: c.pic || c.profile_pic_url || "",
+                is_emprendimiento: EMPRENDIMIENTOS_SET.has((c.username || c.user || "").toLowerCase()),
+                has_mention: (c.text || c.comment || "").includes("@"),
+              })),
+            };
+          } else {
+            setError("Formato JSON no reconocido.");
+            return;
+          }
+          setJsonData(data);
+          setState("preview");
+        } catch {
+          setError("No se pudo leer el archivo JSON.");
+        }
+      } else {
+        // CSV
+        const comments = parseCSV(content);
+        if (comments.length === 0) {
+          setError("No se encontraron comentarios en el CSV. Verifica que tenga columnas 'username' y 'text'.");
           return;
         }
-        setJsonData(data);
+        setJsonData({
+          post_url: "",
+          extracted_at: "",
+          total_comments: comments.length,
+          comments,
+        });
         setState("preview");
-      } catch {
-        setError("No se pudo leer el archivo JSON. Verifica que sea valido.");
       }
     };
     reader.readAsText(file);
@@ -245,7 +323,7 @@ export default function Home() {
               <h2 className="text-lg font-bold text-[#D63B6F]">Cargar comentarios</h2>
             </div>
             <p className="text-sm text-[#8C3A5A] mb-5">
-              Subi el archivo <span className="font-mono bg-pink-50 px-1.5 py-0.5 rounded text-[#D63B6F]">comentarios_instagram.json</span> generado por el extractor.
+              Subi el archivo CSV (de la extension de Chrome) o JSON con los comentarios del post.
             </p>
 
             <div
@@ -254,13 +332,13 @@ export default function Home() {
             >
               <Image src="/images/my-melody-heart.png" alt="" width={48} height={48} className="mx-auto mb-3 opacity-60" />
               <p className="text-[#D63B6F] font-medium">
-                {fileName || "Click aca para subir el archivo JSON"}
+                {fileName || "Click aca para subir el archivo (CSV o JSON)"}
               </p>
               <p className="text-xs text-pink-400 mt-1">o arrastralo aca</p>
               <input
                 ref={fileRef}
                 type="file"
-                accept=".json"
+                accept=".json,.csv,.tsv,.txt,.xlsx"
                 onChange={handleFileUpload}
                 className="hidden"
               />
