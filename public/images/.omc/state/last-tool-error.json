@@ -1,0 +1,7 @@
+{
+  "tool_name": "mcp__Claude_Preview__preview_screenshot",
+  "tool_input_preview": "{\"serverId\":\"46c6acdf-4f69-46a7-9d1c-a108e44ceb26\"}",
+  "error": "Server not found. No running servers for this workspace.",
+  "timestamp": "2026-04-09T01:41:59.762Z",
+  "retry_count": 1
+}
