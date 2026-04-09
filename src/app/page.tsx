@@ -1,7 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import Image from "next/image";
+
+interface Comment {
+  username: string;
+  text: string;
+  pic: string;
+  is_emprendimiento: boolean;
+  has_mention: boolean;
+}
+
+interface JsonData {
+  post_url: string;
+  extracted_at: string;
+  total_comments: number;
+  comments: Comment[];
+}
 
 interface Winner {
   number: number;
@@ -20,174 +35,138 @@ interface Stats {
   exclNoAt: number;
 }
 
-type AppState = "idle" | "logging_in" | "2fa" | "loading" | "done" | "error";
+const EMPRENDIMIENTOS_ORDEN = [
+  "herse.accesorios", "pushilol", "akihabara.shop.arg", "pitsuki.atelier",
+  "universopola", "dubu.dubu.shop", "blanca.aurora.lenceria", "nagareboshistore",
+  "yubistore.ros", "pinkmonster_makeup", "__duckstore__", "gg.forge",
+  "merci.verse", "pinktulip.store", "cerezaa_store", "sweet.ros.crochet",
+  "michis2d", "pepones.juguetesdetela", "michi_magico_store", "sukisukiregalos",
+  "pusscat.store", "star.tiendaderegalos", "nerisanart", "sublimando.ideas.ok",
+  "diario_foto.grafico", "_encandelarte", "mysoftystore", "amikittyshop",
+  "shadowww_porcelana", "anara.made", "gauchapowerdesign", "amikoru_crochet",
+  "layover.crochet", "_nekoluli", "puchistore.ok", "mkmrelax",
+  "enciassangrantesok", "wagashirosario", "ilusiones_3drosario",
+  "la_mazmorra_lvl_24", "bufon_negro_", "sailorcrisis_", "soyfan.creaciones",
+  "memi_.crochet", "thiago3d_", "kitty.tienda_arg", "espacio_lv97",
+  "rinascita.gian", "xiaomao.cat_", "pinsland.ok", "puntos_y_detalles._",
+  "kiki.berry.mouse", "kinoko.jew", "lautaro.estudio.030", "envuelveme2021",
+  "by.pam.papeleria", "dragon_fly_store7894", "flaviafernandespasteleria",
+  "kuma_draw26", "anyaobjetoscreativos", "decorando_sonrisa", "fuwapasteleria",
+  "sabor_a_mi_siempre", "okami.snacksrosario", "proyecto.kumi", "fuegomacetas",
+  "partyart_official",
+];
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+// Seeded random for reproducibility
+function seededRng(seed: number) {
+  let t = seed + 0x6D2B79F5;
+  return function () {
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+type AppState = "upload" | "preview" | "rolling" | "done";
 
 export default function Home() {
-  const [state, setState] = useState<AppState>("idle");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [code2fa, setCode2fa] = useState("");
-  const [progress, setProgress] = useState("");
-  const [commentCount, setCommentCount] = useState(0);
-  const [expectedComments, setExpectedComments] = useState(0);
-  const [liveComments, setLiveComments] = useState<{username: string; pic: string}[]>([]);
+  const [state, setState] = useState<AppState>("upload");
+  const [jsonData, setJsonData] = useState<JsonData | null>(null);
+  const [numGanadores, setNumGanadores] = useState("63");
+  const [seedInput, setSeedInput] = useState("");
   const [winners, setWinners] = useState<Winner[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [seed, setSeed] = useState<number | null>(null);
-  const [seedInput, setSeedInput] = useState("");
-  const [postUrl, setPostUrl] = useState("https://www.instagram.com/p/DWzm5E3CcUp/");
-  const [numGanadores, setNumGanadores] = useState("63");
   const [error, setError] = useState("");
+  const [fileName, setFileName] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
 
-  async function handleLogin() {
-    if (!username || !password) return;
-    setState("logging_in");
-    setError("");
-    setProgress("Conectando a Instagram...");
-
-    try {
-      const res = await fetch(`${API_URL}/api/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        try {
-          const err = JSON.parse(text);
-          setError(err.detail || "Error de login");
-        } catch {
-          setError(text || `Error ${res.status}`);
-        }
-        setState("error");
-        return;
-      }
-
-      const data = await res.json();
-      if (data.status === "2fa_required") {
-        setState("2fa");
-        return;
-      }
-
-      // Login OK, run sorteo
-      runSorteo();
-    } catch (err: unknown) {
-      setError((err as Error).message);
-      setState("error");
-    }
-  }
-
-  async function handle2FA() {
-    if (!code2fa) return;
-    setState("logging_in");
-    setProgress("Verificando codigo...");
+  function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
     setError("");
 
-    try {
-      const res = await fetch(`${API_URL}/api/login-2fa`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password, code: code2fa }),
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        try {
-          const err = JSON.parse(text);
-          setError(err.detail || "Codigo incorrecto");
-        } catch {
-          setError(text || `Error ${res.status}`);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target?.result as string) as JsonData;
+        if (!data.comments || !Array.isArray(data.comments)) {
+          setError("El archivo no tiene el formato correcto. Usa el script extraer_comentarios.py para generarlo.");
+          return;
         }
-        setState("2fa");
-        return;
+        setJsonData(data);
+        setState("preview");
+      } catch {
+        setError("No se pudo leer el archivo JSON. Verifica que sea valido.");
       }
-
-      // 2FA OK, run sorteo
-      runSorteo();
-    } catch (err: unknown) {
-      setError((err as Error).message);
-      setState("error");
-    }
+    };
+    reader.readAsText(file);
   }
 
-  async function runSorteo() {
-    setState("loading");
-    setProgress("Cargando post...");
-    setCommentCount(0);
-    setLiveComments([]);
-    setWinners([]);
-    setStats(null);
+  function runSorteo() {
+    if (!jsonData) return;
+    setState("rolling");
 
-    try {
-      const res = await fetch(`${API_URL}/api/sorteo`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username,
-          post_url: postUrl || undefined,
-          num_ganadores: numGanadores ? parseInt(numGanadores) : 63,
-          seed: seedInput ? parseInt(seedInput) : undefined,
-        }),
-      });
+    const num = parseInt(numGanadores) || 63;
 
-      const reader = res.body?.getReader();
-      if (!reader) throw new Error("No response stream");
+    // Filter
+    const validos = jsonData.comments.filter(c => !c.is_emprendimiento && c.has_mention);
+    const exclEmp = jsonData.comments.filter(c => c.is_emprendimiento).length;
+    const exclNoAt = jsonData.comments.filter(c => !c.is_emprendimiento && !c.has_mention).length;
 
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        let eventType = "";
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            eventType = line.slice(7);
-          } else if (line.startsWith("data: ") && eventType) {
-            const data = JSON.parse(line.slice(6));
-            if (eventType === "progress") {
-              setProgress(data.message);
-              if (data.count) setCommentCount(data.count);
-              if (data.stats) setStats(data.stats);
-              // Capture expected total from post info message
-              const match = data.message?.match?.(/(\d+)\s*comentarios/);
-              if (match && data.step === "post_ok") setExpectedComments(parseInt(match[1]));
-            } else if (eventType === "comments_batch") {
-              setCommentCount(data.total);
-              setProgress(data.message);
-              setLiveComments(prev => {
-                const seen = new Set(prev.map(c => c.username));
-                const newOnes = data.batch.filter((c: {username: string}) => !seen.has(c.username));
-                const next = [...prev, ...newOnes];
-                return next.slice(-50);
-              });
-            } else if (eventType === "result") {
-              setWinners(data.ganadores);
-              setSeed(data.seed);
-              setStats(data.stats);
-              setState("done");
-              return;
-            } else if (eventType === "error") {
-              setError(data.message);
-              setState("error");
-              return;
-            }
-            eventType = "";
-          }
-        }
+    // Deduplicate
+    const seen = new Set<string>();
+    const participantes: Comment[] = [];
+    for (const c of validos) {
+      if (!seen.has(c.username)) {
+        seen.add(c.username);
+        participantes.push(c);
       }
-    } catch (err: unknown) {
-      setError((err as Error).message);
-      setState("error");
     }
+
+    // Draw with seed
+    const seedFinal = seedInput ? parseInt(seedInput) : Math.floor(Date.now() / 1000);
+    const rng = seededRng(seedFinal);
+    const n = Math.min(num, participantes.length);
+
+    // Shuffle with seeded RNG
+    const shuffled = [...participantes];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    const ganadores = shuffled.slice(0, n);
+
+    const result = ganadores.map((g, i) => ({
+      number: i + 1,
+      username: g.username,
+      comment: g.text,
+      pic: g.pic,
+      emprendimiento: EMPRENDIMIENTOS_ORDEN[i] || "---",
+    }));
+
+    // Animate: show winners one by one
+    setStats({
+      total: jsonData.comments.length,
+      validos: validos.length,
+      unicos: participantes.length,
+      ganadores: n,
+      exclEmp,
+      exclNoAt,
+    });
+    setSeed(seedFinal);
+
+    // Stagger reveal
+    let i = 0;
+    const interval = setInterval(() => {
+      i += 3;
+      setWinners(result.slice(0, i));
+      if (i >= result.length) {
+        clearInterval(interval);
+        setWinners(result);
+        setState("done");
+      }
+    }, 100);
   }
 
   function downloadResults() {
@@ -195,7 +174,7 @@ export default function Home() {
     let txt = `${"=".repeat(60)}\n`;
     txt += `MEGA SORTEO FERIA SANRIO - ${winners.length} GANADORES\n`;
     txt += `Fecha: ${new Date().toLocaleString("es-AR")}\n`;
-    txt += `Post: https://www.instagram.com/p/DWzm5E3CcUp/\n`;
+    txt += `Post: ${jsonData?.post_url || ""}\n`;
     txt += `Seed: ${seed}\n`;
     txt += `${"=".repeat(60)}\n\n`;
 
@@ -224,6 +203,17 @@ export default function Home() {
     URL.revokeObjectURL(url);
   }
 
+  function reset() {
+    setState("upload");
+    setJsonData(null);
+    setWinners([]);
+    setStats(null);
+    setSeed(null);
+    setError("");
+    setFileName("");
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
   return (
     <div className="min-h-screen py-8 px-4 relative overflow-hidden">
       {/* Floating decorations */}
@@ -244,194 +234,146 @@ export default function Home() {
             <Image src="/images/my-melody.png" alt="My Melody" width={100} height={133} className="mx-auto drop-shadow-lg" priority />
           </div>
           <h1 className="text-3xl font-bold text-[#D63B6F] drop-shadow-sm mt-3">Mega Sorteo Feria Sanrio</h1>
-          <p className="text-[#8C3A5A] mt-1 text-sm tracking-wide">63 ganadores</p>
+          <p className="text-[#8C3A5A] mt-1 text-sm tracking-wide">Sorteo de ganadores desde comentarios de Instagram</p>
         </div>
 
-        {/* Login Card */}
-        {(state === "idle" || state === "error") && (
+        {/* Upload Card */}
+        {state === "upload" && (
           <div className="bg-white rounded-2xl shadow-xl p-6 mb-6 border-2 border-pink-300 slide-up">
             <div className="flex items-center gap-3 mb-4">
               <Image src="/images/hello-kitty.png" alt="" width={32} height={32} />
-              <h2 className="text-lg font-bold text-[#D63B6F]">Login de Instagram</h2>
+              <h2 className="text-lg font-bold text-[#D63B6F]">Cargar comentarios</h2>
             </div>
-            <p className="text-sm text-[#8C3A5A] mb-4">Se necesita una cuenta de Instagram para leer los comentarios del post.</p>
+            <p className="text-sm text-[#8C3A5A] mb-5">
+              Subi el archivo <span className="font-mono bg-pink-50 px-1.5 py-0.5 rounded text-[#D63B6F]">comentarios_instagram.json</span> generado por el extractor.
+            </p>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-              <div>
-                <label className="block text-sm font-medium text-[#5C1A33] mb-1">Usuario</label>
-                <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="tu_usuario" autoComplete="off"
-                  className="w-full px-4 py-2.5 rounded-xl border-2 border-pink-200 bg-pink-50/50 text-[#5C1A33] placeholder-pink-300 focus:outline-none focus:border-[#FF5C8D] focus:ring-2 focus:ring-pink-200 transition-all" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-[#5C1A33] mb-1">Contrasena</label>
-                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="tu contrasena" autoComplete="off"
-                  className="w-full px-4 py-2.5 rounded-xl border-2 border-pink-200 bg-pink-50/50 text-[#5C1A33] placeholder-pink-300 focus:outline-none focus:border-[#FF5C8D] focus:ring-2 focus:ring-pink-200 transition-all" />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-              <div>
-                <label className="block text-sm font-medium text-[#5C1A33] mb-1">Link del post de Instagram</label>
-                <input type="text" value={postUrl} onChange={(e) => setPostUrl(e.target.value)} placeholder="https://www.instagram.com/p/..." autoComplete="off"
-                  className="w-full px-4 py-2.5 rounded-xl border-2 border-pink-200 bg-pink-50/50 text-[#5C1A33] placeholder-pink-300 focus:outline-none focus:border-[#FF5C8D] focus:ring-2 focus:ring-pink-200 transition-all text-sm" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-[#5C1A33] mb-1">Cantidad de ganadores</label>
-                <input type="number" value={numGanadores} onChange={(e) => setNumGanadores(e.target.value)} placeholder="63" min="1" autoComplete="off"
-                  className="w-32 px-4 py-2.5 rounded-xl border-2 border-pink-200 bg-pink-50/50 text-[#5C1A33] placeholder-pink-300 focus:outline-none focus:border-[#FF5C8D] focus:ring-2 focus:ring-pink-200 transition-all" />
-              </div>
-            </div>
-
-            <div className="mb-5">
-              <label className="block text-sm font-medium text-[#8C3A5A] mb-1">Seed (opcional - para reproducir un sorteo)</label>
-              <input type="text" value={seedInput} onChange={(e) => setSeedInput(e.target.value)} placeholder="Dejar vacio para generar nueva" autoComplete="off"
-                className="w-48 px-4 py-2 rounded-xl border-2 border-pink-100 bg-white text-[#5C1A33] placeholder-pink-300 focus:outline-none focus:border-[#FF5C8D] text-sm transition-all" />
+            <div
+              className="border-2 border-dashed border-pink-300 rounded-xl p-8 text-center hover:bg-pink-50/50 transition-colors cursor-pointer"
+              onClick={() => fileRef.current?.click()}
+            >
+              <Image src="/images/my-melody-heart.png" alt="" width={48} height={48} className="mx-auto mb-3 opacity-60" />
+              <p className="text-[#D63B6F] font-medium">
+                {fileName || "Click aca para subir el archivo JSON"}
+              </p>
+              <p className="text-xs text-pink-400 mt-1">o arrastralo aca</p>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".json"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
             </div>
 
             {error && (
-              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
+              <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
                 <span className="font-bold">Error:</span> {error}
               </div>
             )}
-
-            <button onClick={handleLogin} disabled={!username || !password}
-              className="w-full sm:w-auto px-10 py-3.5 bg-gradient-to-r from-[#FF5C8D] to-[#FF8FAB] text-white font-bold rounded-xl shadow-lg hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100 text-lg cursor-pointer">
-              SORTEAR
-            </button>
           </div>
         )}
 
-        {/* 2FA Card */}
-        {state === "2fa" && (
+        {/* Preview Card - after upload, before sorteo */}
+        {(state === "preview" || state === "rolling") && jsonData && (
           <div className="bg-white rounded-2xl shadow-xl p-6 mb-6 border-2 border-pink-300 slide-up">
-            <div className="flex items-center gap-3 mb-3">
-              <Image src="/images/my-melody-heart.png" alt="" width={32} height={32} />
-              <h2 className="text-lg font-bold text-[#D63B6F]">Codigo de verificacion</h2>
+            <div className="flex items-center gap-3 mb-4">
+              <Image src="/images/my-melody-strawberry.png" alt="" width={28} height={28} />
+              <h2 className="text-lg font-bold text-[#D63B6F]">Datos cargados</h2>
             </div>
-            <p className="text-sm text-[#8C3A5A] mb-4">Instagram envio un codigo a tu telefono. Ingresalo aca:</p>
-            {error && (
-              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
-                <span className="font-bold">Error:</span> {error}
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">
+              <div className="bg-pink-50 rounded-xl p-3 text-center">
+                <div className="text-2xl font-bold text-[#D63B6F]">{jsonData.total_comments}</div>
+                <div className="text-xs text-[#8C3A5A]">Comentarios</div>
               </div>
-            )}
-            <div className="flex gap-3 items-end">
-              <input type="text" value={code2fa} onChange={(e) => setCode2fa(e.target.value)} placeholder="123456" maxLength={6} autoFocus
-                className="w-40 px-4 py-2.5 rounded-xl border-2 border-pink-200 bg-pink-50/50 text-[#5C1A33] text-center text-xl tracking-widest font-mono focus:outline-none focus:border-[#FF5C8D] focus:ring-2 focus:ring-pink-200 transition-all"
-                onKeyDown={(e) => e.key === "Enter" && handle2FA()} />
-              <button onClick={handle2FA} disabled={!code2fa}
-                className="px-6 py-2.5 bg-gradient-to-r from-[#FF5C8D] to-[#FF8FAB] text-white font-bold rounded-xl shadow-lg hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-40 cursor-pointer">
-                Verificar
+              <div className="bg-green-50 rounded-xl p-3 text-center">
+                <div className="text-2xl font-bold text-[#D63B6F]">
+                  {jsonData.comments.filter(c => !c.is_emprendimiento && c.has_mention).length}
+                </div>
+                <div className="text-xs text-[#8C3A5A]">Validos</div>
+              </div>
+              <div className="bg-purple-50 rounded-xl p-3 text-center">
+                <div className="text-2xl font-bold text-[#D63B6F]">
+                  {new Set(jsonData.comments.filter(c => !c.is_emprendimiento && c.has_mention).map(c => c.username)).size}
+                </div>
+                <div className="text-xs text-[#8C3A5A]">Participantes unicos</div>
+              </div>
+            </div>
+
+            <p className="text-xs text-[#8C3A5A] mb-4">
+              Post: <span className="font-mono">{jsonData.post_url}</span> | Extraido: {jsonData.extracted_at}
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
+              <div>
+                <label className="block text-sm font-medium text-[#5C1A33] mb-1">Cantidad de ganadores</label>
+                <input type="number" value={numGanadores} onChange={(e) => setNumGanadores(e.target.value)} min="1" autoComplete="off"
+                  className="w-32 px-4 py-2.5 rounded-xl border-2 border-pink-200 bg-pink-50/50 text-[#5C1A33] focus:outline-none focus:border-[#FF5C8D] focus:ring-2 focus:ring-pink-200 transition-all" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-[#8C3A5A] mb-1">Seed (opcional)</label>
+                <input type="text" value={seedInput} onChange={(e) => setSeedInput(e.target.value)} placeholder="Auto-generada" autoComplete="off"
+                  className="w-48 px-4 py-2 rounded-xl border-2 border-pink-100 bg-white text-[#5C1A33] placeholder-pink-300 focus:outline-none focus:border-[#FF5C8D] text-sm transition-all" />
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <button onClick={runSorteo} disabled={state === "rolling"}
+                className="px-10 py-3.5 bg-gradient-to-r from-[#FF5C8D] to-[#FF8FAB] text-white font-bold rounded-xl shadow-lg hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-60 text-lg cursor-pointer">
+                {state === "rolling" ? "Sorteando..." : "SORTEAR"}
+              </button>
+              <button onClick={reset}
+                className="px-6 py-3 bg-white text-[#D63B6F] font-bold rounded-xl shadow border-2 border-pink-200 hover:bg-pink-50 transition-all cursor-pointer">
+                Cambiar archivo
               </button>
             </div>
           </div>
         )}
 
-        {/* Loading */}
-        {(state === "logging_in" || state === "loading") && (
-          <div className="bg-white rounded-2xl shadow-xl p-8 mb-6 border-2 border-pink-300 text-center slide-up">
-            {/* Bouncing characters */}
-            <div className="flex items-end justify-center gap-4 mb-5">
-              <div className="float-animation" style={{ animationDelay: "0s" }}>
-                <Image src="/images/my-melody.png" alt="" width={50} height={66} className="drop-shadow-md" />
-              </div>
-              <div className="float-animation" style={{ animationDelay: "0.4s" }}>
-                <Image src="/images/hello-kitty.png" alt="" width={46} height={55} className="drop-shadow-md" />
-              </div>
-              <div className="float-animation" style={{ animationDelay: "0.8s" }}>
-                <Image src="/images/my-melody-heart.png" alt="" width={48} height={52} className="drop-shadow-md" />
-              </div>
-              <div className="float-animation" style={{ animationDelay: "1.2s" }}>
-                <Image src="/images/my-melody-strawberry.png" alt="" width={40} height={60} className="drop-shadow-md" />
-              </div>
-            </div>
-
-            {/* Step indicators */}
-            <div className="flex justify-center gap-2 mb-4">
-              <StepDot active={state === "logging_in"} done={state === "loading"} label="Login" />
-              <div className="w-6 h-0.5 bg-pink-200 self-center" />
-              <StepDot active={state === "loading" && commentCount === 0} done={commentCount > 0} label="Post" />
-              <div className="w-6 h-0.5 bg-pink-200 self-center" />
-              <StepDot active={commentCount > 0} done={false} label="Comentarios" />
-            </div>
-
-            <h2 className="text-lg font-bold text-[#D63B6F] mb-2">{progress}</h2>
-
-            {commentCount > 0 && (
-              <div className="mt-4 max-w-md mx-auto">
-                <div className="w-full bg-pink-100 rounded-full h-4 overflow-hidden shadow-inner">
-                  <div className="h-full bg-gradient-to-r from-[#FF5C8D] via-[#FF8FAB] to-[#FF5C8D] rounded-full transition-all duration-700 relative"
-                    style={{
-                      width: `${Math.min((commentCount / Math.max(expectedComments, 1)) * 100, 100)}%`,
-                      backgroundSize: "200% 100%",
-                      animation: "shimmer 1.5s ease-in-out infinite",
-                    }} />
-                </div>
-                <p className="text-sm text-[#8C3A5A] mt-2 font-medium">{commentCount}{expectedComments > 0 ? ` de ~${expectedComments}` : ""} comentarios</p>
-              </div>
-            )}
-
-            <p className="text-xs text-pink-400 mt-5">Esto puede tardar 1-2 minutos, no cierres la pagina</p>
-
-            {/* Live comments feed */}
-            {liveComments.length > 0 && (
-              <div className="mt-5 max-w-md mx-auto">
-                <p className="text-xs text-[#8C3A5A] mb-2 font-medium">Comentarios extraidos:</p>
-                <div className="bg-pink-50 rounded-xl p-3 max-h-52 overflow-y-auto">
-                  <div className="space-y-1.5">
-                    {liveComments.map((c, i) => (
-                      <div key={`${c.username}-${i}`} className="flex items-center gap-2 slide-up" style={{animationDelay: `${i * 20}ms`}}>
-                        {c.pic ? (
-                          <img src={c.pic} alt="" className="w-6 h-6 rounded-full border border-pink-200 flex-shrink-0" />
-                        ) : (
-                          <div className="w-6 h-6 rounded-full bg-pink-200 flex-shrink-0" />
-                        )}
-                        <span className="text-xs text-[#5C1A33] truncate">@{c.username}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
         {/* Results */}
-        {state === "done" && winners.length > 0 && (
+        {winners.length > 0 && (
           <>
-            <div className="bg-white rounded-2xl shadow-xl p-6 mb-6 border-2 border-pink-300 slide-up">
-              <div className="flex items-center gap-3 mb-4">
-                <Image src="/images/my-melody-heart.png" alt="" width={28} height={28} />
-                <h2 className="text-lg font-bold text-[#D63B6F]">Estadisticas</h2>
-              </div>
-              {stats && (
+            {/* Stats */}
+            {stats && state === "done" && (
+              <div className="bg-white rounded-2xl shadow-xl p-6 mb-6 border-2 border-pink-300 slide-up">
+                <div className="flex items-center gap-3 mb-4">
+                  <Image src="/images/my-melody-heart.png" alt="" width={28} height={28} />
+                  <h2 className="text-lg font-bold text-[#D63B6F]">Resultado del sorteo</h2>
+                </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   <StatBox label="Comentarios" value={stats.total} color="bg-pink-50" />
                   <StatBox label="Validos" value={stats.validos} color="bg-green-50" />
                   <StatBox label="Participantes" value={stats.unicos} color="bg-purple-50" />
                   <StatBox label="Ganadores" value={stats.ganadores} color="bg-amber-50" />
                 </div>
-              )}
-              <p className="text-xs text-[#8C3A5A] mt-3">
-                Seed: <span className="font-mono bg-pink-50 px-2 py-0.5 rounded">{seed}</span>
-                <span className="ml-2 text-pink-400">(guardar para reproducir el sorteo)</span>
-              </p>
-            </div>
+                <p className="text-xs text-[#8C3A5A] mt-3">
+                  Seed: <span className="font-mono bg-pink-50 px-2 py-0.5 rounded">{seed}</span>
+                  <span className="ml-2 text-pink-400">(guardar para reproducir el sorteo)</span>
+                </p>
+              </div>
+            )}
 
-            <div className="flex gap-3 mb-6 slide-up">
-              <button onClick={downloadResults}
-                className="px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-500 text-white font-bold rounded-xl shadow-lg hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer">
-                Descargar resultados (.txt)
-              </button>
-              <button onClick={() => { setState("idle"); setWinners([]); setStats(null); setError(""); }}
-                className="px-6 py-3 bg-white text-[#D63B6F] font-bold rounded-xl shadow-lg border-2 border-pink-200 hover:bg-pink-50 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer">
-                Nuevo sorteo
-              </button>
-            </div>
+            {/* Actions */}
+            {state === "done" && (
+              <div className="flex gap-3 mb-6 slide-up">
+                <button onClick={downloadResults}
+                  className="px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-500 text-white font-bold rounded-xl shadow-lg hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer">
+                  Descargar resultados (.txt)
+                </button>
+                <button onClick={reset}
+                  className="px-6 py-3 bg-white text-[#D63B6F] font-bold rounded-xl shadow-lg border-2 border-pink-200 hover:bg-pink-50 hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer">
+                  Nuevo sorteo
+                </button>
+              </div>
+            )}
 
+            {/* Winners list */}
             <div className="space-y-3">
               {winners.map((w, idx) => (
-                <div key={w.number} className="winner-card bg-white/90 backdrop-blur-sm rounded-xl shadow-md p-4 border border-pink-100 hover:border-pink-300 hover:shadow-lg transition-all"
-                  style={{ animationDelay: `${idx * 50}ms` }}>
+                <div key={w.number}
+                  className="winner-card bg-white rounded-xl shadow-md p-4 border border-pink-100 hover:border-pink-300 hover:shadow-lg transition-all"
+                  style={{ animationDelay: `${idx * 30}ms` }}>
                   <div className="flex items-start gap-3">
                     <div className="flex-shrink-0 relative">
                       {w.pic ? (
@@ -456,32 +398,25 @@ export default function Home() {
               ))}
             </div>
 
-            <div className="text-center mt-8 mb-4">
-              <button onClick={downloadResults}
-                className="px-8 py-3 bg-gradient-to-r from-[#FF5C8D] to-[#FF8FAB] text-white font-bold rounded-xl shadow-lg hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer">
-                Descargar todos los resultados
-              </button>
-            </div>
+            {/* Footer download */}
+            {state === "done" && (
+              <div className="text-center mt-8 mb-4">
+                <button onClick={downloadResults}
+                  className="px-8 py-3 bg-gradient-to-r from-[#FF5C8D] to-[#FF8FAB] text-white font-bold rounded-xl shadow-lg hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer">
+                  Descargar todos los resultados
+                </button>
+              </div>
+            )}
           </>
         )}
 
+        {/* Footer */}
         <div className="text-center mt-8 flex items-center justify-center gap-2">
           <Image src="/images/my-melody-strawberry.png" alt="" width={20} height={20} className="opacity-50" />
           <span className="text-xs text-pink-400">Sorteo Feria Sanrio 2026</span>
           <Image src="/images/my-melody-strawberry.png" alt="" width={20} height={20} className="opacity-50" />
         </div>
       </div>
-    </div>
-  );
-}
-
-function StepDot({ active, done, label }: { active: boolean; done: boolean; label: string }) {
-  return (
-    <div className="flex flex-col items-center gap-1">
-      <div className={`w-3 h-3 rounded-full transition-all duration-500 ${
-        done ? "bg-green-400 scale-110" : active ? "bg-[#FF5C8D] pulse-pink scale-110" : "bg-pink-200"
-      }`} />
-      <span className={`text-[10px] ${done ? "text-green-500" : active ? "text-[#D63B6F] font-bold" : "text-pink-300"}`}>{label}</span>
     </div>
   );
 }
