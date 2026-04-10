@@ -35,28 +35,36 @@ interface Stats {
   exclNoAt: number;
 }
 
+// Emprendimientos que DAN premio (en orden de flyers). Ganador #N -> premio de emprendimiento #N
 const EMPRENDIMIENTOS_ORDEN = [
   "herse.accesorios", "pushilol", "akihabara.shop.arg", "pitsuki.atelier",
   "universopola", "dubu.dubu.shop", "blanca.aurora.lenceria", "nagareboshistore",
-  "yubistore.ros", "pinkmonster_makeup", "__duckstore__", "gg.forge",
+  "yubistore.ros", "__duckstore__", "gg.forge",
   "merci.verse", "pinktulip.store", "cerezaa_store", "sweet.ros.crochet",
   "michis2d", "pepones.juguetesdetela", "michi_magico_store", "sukisukiregalos",
-  "pusscat.store", "star.tiendaderegalos", "nerisanart", "sublimando.ideas.ok",
+  "pusscat.store", "star.tiendaderegalos", "sublimando.ideas.ok",
   "diario_foto.grafico", "_encandelarte", "mysoftystore", "amikittyshop",
   "shadowww_porcelana", "anara.made", "gauchapowerdesign", "amikoru_crochet",
-  "layover.crochet", "_nekoluli", "puchistore.ok", "mkmrelax",
+  "layover.crochet", "puchistore.ok", "mkmrelax",
   "enciassangrantesok", "wagashirosario", "ilusiones_3drosario",
-  "la_mazmorra_lvl_24", "bufon_negro_", "sailorcrisis_", "soyfan.creaciones",
+  "la_mazmorra_lvl_24", "bufon_negro_", "soyfan.creaciones",
   "memi_.crochet", "thiago3d_", "kitty.tienda_arg", "espacio_lv97",
   "rinascita.gian", "xiaomao.cat_", "pinsland.ok", "puntos_y_detalles._",
-  "kiki.berry.mouse", "kinoko.jew", "lautaro.estudio.030", "envuelveme2021",
+  "kinoko.jew", "lautaro.estudio.030", "envuelveme2021",
   "by.pam.papeleria", "dragon_fly_store7894", "flaviafernandespasteleria",
-  "kuma_draw26", "anyaobjetoscreativos", "decorando_sonrisa", "fuwapasteleria",
+  "anyaobjetoscreativos",
+  "decorando_sonrisa", "decorando_sonrisa", "decorando_sonrisa", // 3 premios
+  "fuwapasteleria",
   "sabor_a_mi_siempre", "okami.snacksrosario", "proyecto.kumi", "fuegomacetas",
   "partyart_official",
-];
+]; // 63 total
 
-const EMPRENDIMIENTOS_SET = new Set(EMPRENDIMIENTOS_ORDEN);
+// TODOS los emprendimientos (incluyendo los que no dan premio) se excluyen del sorteo
+const EMPRENDIMIENTOS_SET = new Set([
+  ...EMPRENDIMIENTOS_ORDEN,
+  "pinkmonster_makeup", "nerisanart", "_nekoluli",
+  "kiki.berry.mouse", "kuma_draw26", "sailorcrisis_",
+]);
 
 // Seeded random for reproducibility
 function seededRng(seed: number) {
