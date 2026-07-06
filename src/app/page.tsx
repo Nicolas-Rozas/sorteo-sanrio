@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import Image from "next/image";
 
 interface Comment {
@@ -35,8 +35,16 @@ interface Stats {
   exclNoAt: number;
 }
 
-// Emprendimientos que DAN premio (en orden de flyers). Ganador #N -> premio de emprendimiento #N
-const EMPRENDIMIENTOS_ORDEN = [
+// Tipo de emprendimiento: cuenta de IG + cuantos premios reparte (0 = participa pero no regala)
+interface Emp {
+  handle: string;
+  premios: number;
+}
+
+const STORAGE_KEY = "sanrio_emprendimientos_v1";
+
+// Lista de la ultima feria, en orden de flyers. El ganador #N recibe el premio del emprendimiento #N.
+const ORDEN_DEFAULT = [
   "herse.accesorios", "pushilol", "akihabara.shop.arg", "pitsuki.atelier",
   "universopola", "dubu.dubu.shop", "blanca.aurora.lenceria", "nagareboshistore",
   "yubistore.ros", "__duckstore__", "gg.forge",
@@ -57,14 +65,41 @@ const EMPRENDIMIENTOS_ORDEN = [
   "fuwapasteleria",
   "sabor_a_mi_siempre", "okami.snacksrosario", "proyecto.kumi", "fuegomacetas",
   "partyart_official",
-]; // 63 total
+];
 
-// TODOS los emprendimientos (incluyendo los que no dan premio) se excluyen del sorteo
-const EMPRENDIMIENTOS_SET = new Set([
-  ...EMPRENDIMIENTOS_ORDEN,
+// Participan (se excluyen del sorteo) pero NO dan premio
+const EXTRA_DEFAULT = [
   "pinkmonster_makeup", "nerisanart", "_nekoluli",
   "kiki.berry.mouse", "kuma_draw26", "sailorcrisis_",
-]);
+];
+
+// Arma la lista por defecto {handle, premios} a partir de los arrays de arriba
+function empsFromArrays(orden: string[], extra: string[]): Emp[] {
+  const counts = new Map<string, number>();
+  const order: string[] = [];
+  for (const h of orden) {
+    if (!counts.has(h)) { counts.set(h, 0); order.push(h); }
+    counts.set(h, counts.get(h)! + 1);
+  }
+  const result: Emp[] = order.map((h) => ({ handle: h, premios: counts.get(h)! }));
+  for (const h of extra) if (!counts.has(h)) { result.push({ handle: h, premios: 0 }); counts.set(h, 0); }
+  return result;
+}
+
+// Lista de la feria anterior (template opcional, botón "Cargar feria anterior").
+const LAST_FERIA_EMPRENDIMIENTOS: Emp[] = empsFromArrays(ORDEN_DEFAULT, EXTRA_DEFAULT);
+// Por defecto la lista arranca VACIA: cada feria se carga de cero (pegar lista).
+const DEFAULT_EMPRENDIMIENTOS: Emp[] = [];
+
+// Deriva el orden de premios (handle repetido segun cuantos premios da) y el set de exclusion
+function ordenFromEmps(emps: Emp[]): string[] {
+  const orden: string[] = [];
+  for (const e of emps) for (let k = 0; k < Math.max(0, Math.floor(e.premios)); k++) orden.push(e.handle);
+  return orden;
+}
+function setFromEmps(emps: Emp[]): Set<string> {
+  return new Set(emps.map((e) => e.handle));
+}
 
 // Seeded random for reproducibility
 function seededRng(seed: number) {
@@ -81,7 +116,7 @@ type AppState = "upload" | "preview" | "rolling" | "done";
 export default function Home() {
   const [state, setState] = useState<AppState>("upload");
   const [jsonData, setJsonData] = useState<JsonData | null>(null);
-  const [numGanadores, setNumGanadores] = useState("63");
+  const [numGanadores, setNumGanadores] = useState("");
   const [seedInput, setSeedInput] = useState("");
   const [winners, setWinners] = useState<Winner[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -89,6 +124,117 @@ export default function Home() {
   const [error, setError] = useState("");
   const [fileName, setFileName] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // --- Emprendimientos editables por la organizadora (se guardan en el navegador) ---
+  const [emprendimientos, setEmprendimientos] = useState<Emp[]>(DEFAULT_EMPRENDIMIENTOS);
+  const [showEditor, setShowEditor] = useState(false);
+  const [draft, setDraft] = useState<Emp[]>([]);
+  const [showPaste, setShowPaste] = useState(false);
+  const [pasteText, setPasteText] = useState("");
+
+  // Cargar la lista guardada (si existe) al abrir la pagina
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.every((e) => e && typeof e.handle === "string")) {
+          setEmprendimientos(
+            parsed.map((e) => ({ handle: String(e.handle), premios: Math.max(0, Math.floor(Number(e.premios) || 0)) }))
+          );
+        }
+      }
+    } catch {}
+  }, []);
+
+  const ordenList = useMemo(() => ordenFromEmps(emprendimientos), [emprendimientos]);
+  const empSet = useMemo(() => setFromEmps(emprendimientos), [emprendimientos]);
+  const totalPremios = ordenList.length;
+
+  // La cantidad de ganadores por defecto sigue a la cantidad de premios cargados
+  useEffect(() => {
+    if (state === "upload" && totalPremios > 0) setNumGanadores(String(totalPremios));
+  }, [totalPremios, state]);
+
+  const draftPremios = draft.reduce((s, e) => s + Math.max(0, Math.floor(Number(e.premios) || 0)), 0);
+
+  function openEditor() {
+    setDraft(emprendimientos.map((e) => ({ ...e })));
+    setShowEditor(true);
+  }
+  function cancelEditor() {
+    setShowEditor(false);
+  }
+  function updateRow(i: number, patch: Partial<Emp>) {
+    setDraft((d) => d.map((e, idx) => (idx === i ? { ...e, ...patch } : e)));
+  }
+  function addRow() {
+    setDraft((d) => [...d, { handle: "", premios: 1 }]);
+  }
+  function removeRow(i: number) {
+    setDraft((d) => d.filter((_, idx) => idx !== i));
+  }
+  function moveRow(i: number, dir: -1 | 1) {
+    setDraft((d) => {
+      const j = i + dir;
+      if (j < 0 || j >= d.length) return d;
+      const c = [...d];
+      [c[i], c[j]] = [c[j], c[i]];
+      return c;
+    });
+  }
+  function saveEditor() {
+    const counts = new Map<string, number>();
+    const order: string[] = [];
+    for (const e of draft) {
+      const h = e.handle.trim().toLowerCase().replace(/^@+/, "").replace(/\s+/g, "");
+      if (!h) continue;
+      const p = Math.max(0, Math.floor(Number(e.premios) || 0));
+      if (!counts.has(h)) { counts.set(h, p); order.push(h); }
+      else counts.set(h, counts.get(h)! + p);
+    }
+    const cleaned = order.map((h) => ({ handle: h, premios: counts.get(h)! }));
+    setEmprendimientos(cleaned);
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned)); } catch {}
+    setShowEditor(false);
+  }
+  function loadLastFeria() {
+    setDraft(LAST_FERIA_EMPRENDIMIENTOS.map((e) => ({ ...e })));
+  }
+
+  // Convierte un texto pegado (nombres separados por coma o renglon) en filas.
+  // Soporta "nombre x3" para indicar cuantos premios da ese emprendimiento.
+  function parsePasteList(text: string): Emp[] {
+    const counts = new Map<string, number>();
+    const order: string[] = [];
+    for (const raw of text.split(/[,\n;]+/)) {
+      let t = raw.trim();
+      if (!t) continue;
+      let premios = 1;
+      const m = t.match(/^(.+?)\s*[x*×]\s*(\d+)\s*$/i);
+      if (m) { t = m[1]; premios = Math.max(0, parseInt(m[2], 10)); }
+      const h = t.trim().toLowerCase().replace(/^@+/, "").replace(/\s+/g, "");
+      if (!h) continue;
+      if (!counts.has(h)) { counts.set(h, premios); order.push(h); }
+      else counts.set(h, counts.get(h)! + premios);
+    }
+    return order.map((h) => ({ handle: h, premios: counts.get(h)! }));
+  }
+
+  function applyPaste(mode: "replace" | "append") {
+    const parsed = parsePasteList(pasteText);
+    if (!parsed.length) { setShowPaste(false); setPasteText(""); return; }
+    if (mode === "replace") {
+      setDraft(parsed);
+    } else {
+      setDraft((d) => {
+        const seen = new Set(d.map((e) => e.handle.trim().toLowerCase().replace(/^@+/, "").replace(/\s+/g, "")));
+        return [...d, ...parsed.filter((e) => !seen.has(e.handle))];
+      });
+    }
+    setPasteText("");
+    setShowPaste(false);
+  }
 
   function parseCSV(text: string): Comment[] {
     const lines = text.split("\n").filter(l => l.trim());
@@ -121,7 +267,7 @@ export default function Home() {
         username,
         text,
         pic,
-        is_emprendimiento: EMPRENDIMIENTOS_SET.has(username),
+        is_emprendimiento: empSet.has(username),
         has_mention: text.includes("@"),
       });
     }
@@ -157,7 +303,7 @@ export default function Home() {
                 username: (c.username || c.user || "").toLowerCase(),
                 text: c.text || c.comment || "",
                 pic: c.pic || c.profile_pic_url || "",
-                is_emprendimiento: EMPRENDIMIENTOS_SET.has((c.username || c.user || "").toLowerCase()),
+                is_emprendimiento: empSet.has((c.username || c.user || "").toLowerCase()),
                 has_mention: (c.text || c.comment || "").includes("@"),
               })),
             };
@@ -193,7 +339,7 @@ export default function Home() {
     if (!jsonData) return;
     setState("rolling");
 
-    const num = parseInt(numGanadores) || 63;
+    const num = parseInt(numGanadores) || totalPremios;
 
     // Filter
     const validos = jsonData.comments.filter(c => !c.is_emprendimiento && c.has_mention);
@@ -228,7 +374,7 @@ export default function Home() {
       username: g.username,
       comment: g.text,
       pic: g.pic,
-      emprendimiento: EMPRENDIMIENTOS_ORDEN[i] || "---",
+      emprendimiento: ordenList[i] || "---",
     }));
 
     // Animate: show winners one by one
@@ -324,15 +470,22 @@ export default function Home() {
         </div>
 
         {/* Upload Card */}
-        {state === "upload" && (
+        {state === "upload" && !showEditor && (
           <div className="bg-white rounded-2xl shadow-xl p-6 mb-6 border-2 border-pink-300 slide-up">
             <div className="flex items-center gap-3 mb-4">
               <Image src="/images/hello-kitty.png" alt="" width={32} height={32} />
               <h2 className="text-lg font-bold text-[#D63B6F]">Cargar comentarios</h2>
             </div>
-            <p className="text-sm text-[#8C3A5A] mb-5">
+            <p className="text-sm text-[#8C3A5A] mb-4">
               Subi el archivo CSV (de la extension de Chrome) o JSON con los comentarios del post.
             </p>
+
+            <button
+              onClick={openEditor}
+              className="w-full mb-5 py-2.5 rounded-xl border-2 border-pink-200 bg-pink-50/40 text-[#D63B6F] font-medium hover:bg-pink-50 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+            >
+              ✏️ Editar lista de emprendimientos ({emprendimientos.length})
+            </button>
 
             <div
               className="border-2 border-dashed border-pink-300 rounded-xl p-8 text-center hover:bg-pink-50/50 transition-colors cursor-pointer"
@@ -357,6 +510,132 @@ export default function Home() {
                 <span className="font-bold">Error:</span> {error}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Editor de emprendimientos */}
+        {showEditor && (
+          <div className="bg-white rounded-2xl shadow-xl p-6 mb-6 border-2 border-pink-300 slide-up">
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <div className="flex items-center gap-3">
+                <Image src="/images/hello-kitty.png" alt="" width={32} height={32} />
+                <h2 className="text-lg font-bold text-[#D63B6F]">Editar emprendimientos</h2>
+              </div>
+              <span className="text-xs text-[#8C3A5A] bg-pink-50 px-3 py-1 rounded-full whitespace-nowrap">
+                {draft.length} empres · {draftPremios} premios
+              </span>
+            </div>
+
+            {!showPaste ? (
+              <button
+                onClick={() => setShowPaste(true)}
+                className="mb-4 inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-pink-100 text-[#D63B6F] font-bold text-base hover:bg-pink-200 transition-colors cursor-pointer shadow-sm"
+              >
+                📋 Pegar lista completa (separada por comas)
+              </button>
+            ) : (
+              <div className="mb-4 p-3 bg-pink-50/60 rounded-xl border border-pink-200">
+                <label className="block text-sm font-medium text-[#5C1A33] mb-1">
+                  Pegá los emprendimientos separados por coma
+                </label>
+                <textarea
+                  value={pasteText}
+                  onChange={(e) => setPasteText(e.target.value)}
+                  rows={4}
+                  autoComplete="off"
+                  placeholder="herse.accesorios, pushilol, akihabara.shop.arg, pitsuki.atelier, universopola..."
+                  className="w-full px-3 py-2 rounded-lg border border-pink-200 bg-white text-[#5C1A33] text-sm focus:outline-none focus:border-[#FF5C8D]"
+                />
+                <p className="text-[11px] text-pink-400 mt-1">
+                  Separá con coma o renglón. Cada uno entra con 1 premio (después podés cambiar el número).
+                  Tip: poné <b>nombre x3</b> si ese da 3 premios.
+                </p>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  <button onClick={() => applyPaste("replace")}
+                    className="px-4 py-2 bg-gradient-to-r from-[#FF5C8D] to-[#FF8FAB] text-white font-bold rounded-lg text-sm cursor-pointer">
+                    Reemplazar toda la lista
+                  </button>
+                  <button onClick={() => applyPaste("append")}
+                    className="px-4 py-2 bg-white text-[#D63B6F] font-bold rounded-lg border-2 border-pink-200 hover:bg-pink-50 text-sm cursor-pointer">
+                    Agregar al final
+                  </button>
+                  <button onClick={() => { setShowPaste(false); setPasteText(""); }}
+                    className="px-4 py-2 bg-white text-[#8C3A5A] rounded-lg border-2 border-pink-100 hover:bg-pink-50 text-sm cursor-pointer">
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {draft.length > 0 && (
+              <div className="flex items-center gap-2 px-2 pb-1 text-[11px] font-bold uppercase tracking-wide text-[#8C3A5A]">
+                <span className="w-6 text-right flex-shrink-0">#</span>
+                <span className="flex-1 min-w-0 pl-5">Emprendimiento</span>
+                <span className="w-16 text-center flex-shrink-0">Premios</span>
+                <span className="w-[68px] flex-shrink-0" aria-hidden="true"></span>
+              </div>
+            )}
+
+            <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+              {draft.length === 0 && (
+                <p className="text-center text-sm text-pink-400 py-6">
+                  Todavía no hay emprendimientos. Pegá la lista de arriba o tocá &quot;+ Agregar emprendimiento&quot;.
+                </p>
+              )}
+              {draft.map((e, i) => (
+                <div key={i} className="flex items-center gap-2 bg-pink-50/50 rounded-xl px-2 py-1.5">
+                  <span className="w-6 text-right text-xs font-bold text-pink-400 flex-shrink-0">{i + 1}</span>
+                  <div className="flex-1 min-w-0 flex items-center gap-1">
+                    <span className="text-pink-400 flex-shrink-0">@</span>
+                    <input
+                      value={e.handle}
+                      onChange={(ev) => updateRow(i, { handle: ev.target.value })}
+                      placeholder="usuario_de_instagram"
+                      autoComplete="off"
+                      className="flex-1 min-w-0 px-2 py-1.5 rounded-lg border border-pink-200 bg-white text-[#5C1A33] text-sm focus:outline-none focus:border-[#FF5C8D]"
+                    />
+                  </div>
+                  <input
+                    type="number"
+                    min="0"
+                    value={e.premios}
+                    onChange={(ev) => updateRow(i, { premios: Math.max(0, Math.floor(Number(ev.target.value) || 0)) })}
+                    title="Cantidad de premios"
+                    className="w-16 flex-shrink-0 px-2 py-1.5 rounded-lg border border-pink-200 bg-white text-[#5C1A33] text-sm text-center focus:outline-none focus:border-[#FF5C8D]"
+                  />
+                  <div className="w-[68px] flex-shrink-0 flex items-center justify-end">
+                    <button onClick={() => moveRow(i, -1)} className="px-1.5 text-pink-400 hover:text-[#D63B6F] cursor-pointer" title="Subir">▲</button>
+                    <button onClick={() => moveRow(i, 1)} className="px-1.5 text-pink-400 hover:text-[#D63B6F] cursor-pointer" title="Bajar">▼</button>
+                    <button onClick={() => removeRow(i)} className="px-1.5 text-red-400 hover:text-red-600 cursor-pointer" title="Eliminar">✕</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <button
+              onClick={addRow}
+              className="mt-3 w-full py-2 rounded-xl border-2 border-dashed border-pink-300 text-[#D63B6F] font-medium hover:bg-pink-50 transition-colors cursor-pointer"
+            >
+              + Agregar emprendimiento
+            </button>
+
+            <div className="flex flex-wrap items-center gap-3 mt-5">
+              <button onClick={saveEditor}
+                className="px-8 py-3 bg-gradient-to-r from-[#FF5C8D] to-[#FF8FAB] text-white font-bold rounded-xl shadow-lg hover:shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all cursor-pointer">
+                Guardar lista
+              </button>
+              <button onClick={cancelEditor}
+                className="px-5 py-3 bg-white text-[#D63B6F] font-bold rounded-xl shadow border-2 border-pink-200 hover:bg-pink-50 transition-all cursor-pointer">
+                Cancelar
+              </button>
+              <button onClick={loadLastFeria}
+                className="px-5 py-3 bg-white text-[#8C3A5A] rounded-xl shadow border-2 border-pink-100 hover:bg-pink-50 transition-all cursor-pointer text-sm sm:ml-auto">
+                Cargar feria anterior
+              </button>
+            </div>
+            <p className="text-[11px] text-pink-400 mt-3">
+              La lista queda guardada acá, no hace falta guardar nada aparte.
+            </p>
           </div>
         )}
 
