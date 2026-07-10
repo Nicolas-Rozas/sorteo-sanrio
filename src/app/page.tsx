@@ -41,7 +41,7 @@ interface Emp {
   premios: number;
 }
 
-const STORAGE_KEY = "sanrio_emprendimientos_v1";
+const STORAGE_KEY = "sanrio_emprendimientos_v2";
 
 // Lista de la ultima feria, en orden de flyers. El ganador #N recibe el premio del emprendimiento #N.
 const ORDEN_DEFAULT = [
@@ -88,8 +88,41 @@ function empsFromArrays(orden: string[], extra: string[]): Emp[] {
 
 // Lista de la feria anterior (template opcional, botón "Cargar feria anterior").
 const LAST_FERIA_EMPRENDIMIENTOS: Emp[] = empsFromArrays(ORDEN_DEFAULT, EXTRA_DEFAULT);
-// Por defecto la lista arranca VACIA: cada feria se carga de cero (pegar lista).
-const DEFAULT_EMPRENDIMIENTOS: Emp[] = [];
+
+// --- Feria ACTUAL (hardcodeada): se muestra por defecto en CUALQUIER dispositivo ---
+// Orden de flyers. El ganador #N recibe el premio del emprendimiento #N (salteando los que no dan premio).
+const ORDEN_FERIA_ACTUAL = [
+  "kikyo.boutique", "vaquita.coqueta", "tsutsumi_cuadernos", "colorin.colorearte",
+  "osaki.club", "killjoys.lab", "nailu.art", "almendrita.store",
+  "tothemoonamigurumis", "shizu.storeee", "herse.accesorios", "pushilol",
+  "pitsuki.atelier", "universopola", "dubu.dubu.shop", "blanca.aurora.lenceria",
+  "nagareboshistore", "yubistore.ros", "pinkmonster_makeup", "__duckstore__",
+  "gg.forge", "merci.verse", "pinktulip.store", "cerezaa_store",
+  "michis2d", "michi_magico_store", "sukisukiregalos", "pusscat.store",
+  "star.tiendaderegalos", "nerisanart", "sublimando.ideas.ok", "diario_foto.grafico",
+  "_encandelarte", "mysoftystore", "shadow__porcelana", "anara.made",
+  "layover.crochet", "_nekoluli", "puchistore.ok", "mkmrelax",
+  "enciassangrantesok", "wagashirosario", "ilusiones_3drosario", "la_mazmorra_lvl_24",
+  "bufon_negro_", "sailorcrisis_", "memi_.crochet", "thiago3d_",
+  "kitty.tienda_arg", "espacio_lv97", "pinsland.ok", "kiki.berry.mouse",
+  "kinoko.jew", "lautaro.estudio.030", "envuelveme2021", "by.pam.papeleria",
+  "dragon_fly_store7894", "flaviafernandespasteleria", "kuma_draw26", "anyaobjetoscreativos",
+  "decorando_sonrisa", "fuwapasteleria", "sabor_a_mi_siempre", "okami.snacksrosario",
+  "proyecto.kumi", "fuegomacetas", "loveandpop.remeras", "seisecharms",
+  "isa_.acc_", "tienda.moshimoshi",
+];
+
+// De la lista de arriba: participan (se excluyen del sorteo) pero NO dan premio (premios = 0).
+const SIN_PREMIO_ACTUAL = new Set<string>([
+  "pinkmonster_makeup", "_nekoluli", "nerisanart",
+  "kiki.berry.mouse", "kuma_draw26", "sailorcrisis_",
+]);
+
+// Por defecto arranca con la feria actual hardcodeada: 1 premio cada uno, salvo los de SIN_PREMIO_ACTUAL (0).
+const DEFAULT_EMPRENDIMIENTOS: Emp[] = ORDEN_FERIA_ACTUAL.map((handle) => ({
+  handle,
+  premios: SIN_PREMIO_ACTUAL.has(handle) ? 0 : 1,
+}));
 
 // Deriva el orden de premios (handle repetido segun cuantos premios da) y el set de exclusion
 function ordenFromEmps(emps: Emp[]): string[] {
